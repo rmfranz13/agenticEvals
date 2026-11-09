@@ -1,0 +1,6 @@
+.git
+.venv
+.env
+logs
+**/__pycache__
+scoring/reference_controller.py

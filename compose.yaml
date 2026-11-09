@@ -1,9 +1,27 @@
 services:
+  # The agent's sandbox: Inspect's bash/python tools run here.
   default:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     init: true
     command: tail -f /dev/null
     working_dir: /workspace
     network_mode: none
     mem_limit: 2gb
     cpus: 2
+
+  # Grading only: the scorer pipes controller.py in and reads JSON out.
+  grader:
+    build:
+      context: .
+      dockerfile: grader.Dockerfile
+    init: true
+    command: tail -f /dev/null
+    working_dir: /grader
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 1gb
+    cpus: 1

@@ -1,0 +1,14 @@
+[project]
+name = "lunar-lander-eval"
+version = "0.1.0"
+description = "Agentic Inspect eval: write 2-D lunar lander flight software."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "inspect-ai>=0.3.287",
+    "anthropic>=2.5.0",
+    "numpy>=2.5",
+]
+
+[tool.uv]
+package = false

@@ -5,14 +5,13 @@ Inspect task: 2-D lunar lander flight software, Tier 0.
   uv run inspect eval task.py -T n_hidden=50 --model anthropic/claude-opus-5-5
 
 The agent works in a Docker sandbox containing the dev simulator and spec.
-When it submits, the scorer copies /workspace/controller.py out and flies it
-on hidden dispersed scenarios with the host's copy of the simulator, so
-nothing the agent edits in the sandbox can change the grading physics.
+When it submits, the scorer reads /workspace/controller.py and pipes it into
+a separate, network-less `grader` container (compose.yaml) that holds its own
+copy of the simulator. There the physics runs in a trusted process and the
+controller in an unprivileged worker process, so nothing the agent edits or
+writes can change the grading physics or see the hidden-seed secret.
 """
-import asyncio
 import json
-import sys
-import tempfile
 from pathlib import Path
 
 from inspect_ai import Task, task
@@ -24,6 +23,7 @@ from inspect_ai.tool import bash, python
 from inspect_ai.util import sandbox
 
 HERE = Path(__file__).parent
+GRADER = "/grader/scoring/score_runner.py"   # inside the grader container
 
 
 @task
@@ -47,25 +47,17 @@ def landing_scorer(n_hidden: int, secret: str):
             code = await sandbox().read_file("/workspace/controller.py")
         except FileNotFoundError:
             return Score(value=0.0, explanation="No /workspace/controller.py found.")
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "controller.py"
-            path.write_text(code)
-            # NOTE: this runs agent-written code on the scoring host in a subprocess.
-            # Fine for local experiments; for a published eval, grade inside a
-            # separate, network-less scoring container instead.
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable, str(HERE / "scoring" / "score_runner.py"), str(path),
-                "--n", str(n_hidden), "--secret", secret,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            try:
-                out, err = await asyncio.wait_for(proc.communicate(), timeout=60 * n_hidden)
-            except asyncio.TimeoutError:
-                proc.kill()
-                return Score(value=0.0, explanation="Grading timed out (controller too slow).")
         try:
-            res = json.loads(out.decode().strip().splitlines()[-1])
+            result = await sandbox("grader").exec(
+                ["python", GRADER, "-", "--n", str(n_hidden), "--worker-user", "ctrl"],
+                input=code, env={"LANDER_SECRET": secret}, timeout=60 * n_hidden)
+        except TimeoutError:
+            return Score(value=0.0, explanation="Grading timed out (controller too slow).")
+        out, err = result.stdout, result.stderr
+        try:
+            res = json.loads(out.strip().splitlines()[-1])
         except Exception:  # noqa: BLE001
-            return Score(value=0.0, explanation=f"Grader error: {err.decode()[-1500:]}")
+            return Score(value=0.0, explanation=f"Grader error: {err[-1500:]}")
         expl = (f"{res['success_rate']:.0%} of {res.get('n', n_hidden)} hidden flights succeeded. "
                 f"Outcomes: {res.get('status_counts')}. "
                 f"Median miss distance (successful): {res.get('median_distance_successful')}.")
